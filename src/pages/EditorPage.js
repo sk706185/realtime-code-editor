@@ -1,170 +1,86 @@
-import React, { useState, useRef, useEffect } from 'react';
-import toast from 'react-hot-toast';
+import React, { useEffect, useRef } from 'react';
+import Codemirror from 'codemirror';
+import 'codemirror/lib/codemirror.css';
+import 'codemirror/theme/dracula.css';
+import 'codemirror/mode/javascript/javascript';
+import 'codemirror/addon/edit/closetag';
+import 'codemirror/addon/edit/closebrackets';
+
 import ACTIONS from '../Actions';
-import Client from '../components/Client';
-import Editor from '../components/Editor';
-import { initSocket } from '../socket';
 
-import {
-    useLocation,
-    useNavigate,
-    Navigate,
-    useParams,
-} from 'react-router-dom';
-
-const EditorPage = () => {
-    const socketRef = useRef(null);
-    const codeRef = useRef(null);
-
-    const location = useLocation();
-    const navigate = useNavigate();
-    const { roomId } = useParams();
-
-    const [clients, setClients] = useState([]);
+const Editor = ({ socketRef, roomId, onCodeChange }) => {
+    const editorRef = useRef(null);
 
     useEffect(() => {
-        const init = async () => {
-            socketRef.current = await initSocket();
 
-            const handleErrors = (e) => {
-                console.log('socket error', e);
+        async function init() {
 
-                toast.error(
-                    'Socket connection failed, try again later.'
-                );
-
-                navigate('/');
-            };
-
-            socketRef.current.on('connect_error', handleErrors);
-            socketRef.current.on('connect_failed', handleErrors);
-
-            socketRef.current.emit(ACTIONS.JOIN, {
-                roomId,
-                username: location.state?.username,
-            });
-
-            // Joined event
-            socketRef.current.on(
-                ACTIONS.JOINED,
-                ({ clients, username, socketId }) => {
-
-                    if (username !== location.state?.username) {
-                        toast.success(`${username} joined the room.`);
-                    }
-
-                    setClients(clients);
-
-                    socketRef.current.emit(ACTIONS.SYNC_CODE, {
-                        code: codeRef.current,
-                        socketId,
-                    });
+            editorRef.current = Codemirror.fromTextArea(
+                document.getElementById('realtimeEditor'),
+                {
+                    mode: { name: 'javascript', json: true },
+                    theme: 'dracula',
+                    autoCloseTags: true,
+                    autoCloseBrackets: true,
+                    lineNumbers: true,
                 }
             );
 
-            // Disconnected event
-            socketRef.current.on(
-                ACTIONS.DISCONNECTED,
-                ({ socketId, username }) => {
+            editorRef.current.on('change', (instance, changes) => {
 
-                    toast.success(`${username} left the room.`);
+                const { origin } = changes;
 
-                    setClients((prev) =>
-                        prev.filter(
-                            (client) => client.socketId !== socketId
-                        )
+                const code = instance.getValue();
+
+                onCodeChange(code);
+
+                if (origin !== 'setValue') {
+
+                    socketRef.current.emit(
+                        ACTIONS.CODE_CHANGE,
+                        {
+                            roomId,
+                            code,
+                        }
                     );
                 }
-            );
-        };
+            });
+        }
 
         init();
 
-        return () => {
-            if (socketRef.current) {
-                socketRef.current.disconnect();
+    }, [roomId, socketRef, onCodeChange]);
 
-                socketRef.current.off('connect_error');
-                socketRef.current.off('connect_failed');
-                socketRef.current.off(ACTIONS.JOINED);
-                socketRef.current.off(ACTIONS.DISCONNECTED);
+    useEffect(() => {
+
+        const socket = socketRef.current;
+
+        if (!socket) return;
+
+        const handleCodeChange = ({ code }) => {
+
+            if (code !== null && editorRef.current) {
+
+                if (code !== editorRef.current.getValue()) {
+
+                    editorRef.current.setValue(code);
+                }
             }
         };
-    }, [roomId, location.state, navigate]);
 
-    const copyRoomId = async () => {
-        try {
-            await navigator.clipboard.writeText(roomId);
+        socket.on(ACTIONS.CODE_CHANGE, handleCodeChange);
 
-            toast.success(
-                'Room ID has been copied to your clipboard'
-            );
-        } catch (err) {
-            toast.error('Could not copy the Room ID');
+        return () => {
+            socket.off(ACTIONS.CODE_CHANGE, handleCodeChange);
+        };
 
-            console.error(err);
-        }
-    };
-
-    const leaveRoom = () => {
-        navigate('/');
-    };
-
-    if (!location.state) {
-        return <Navigate to="/" />;
-    }
+    }, [socketRef, roomId, onCodeChange]);
 
     return (
-        <div className="mainWrap">
-            <div className="aside">
-                <div className="asideInner">
-
-                    <div className="logo">
-                        <img
-                            className="logoImage"
-                            src="/code-sync.png"
-                            alt="logo"
-                        />
-                    </div>
-
-                    <h3>Connected</h3>
-
-                    <div className="clientsList">
-                        {clients.map((client) => (
-                            <Client
-                                key={client.socketId}
-                                username={client.username}
-                            />
-                        ))}
-                    </div>
-                </div>
-
-                <button
-                    className="btn copyBtn"
-                    onClick={copyRoomId}
-                >
-                    Copy ROOM ID
-                </button>
-
-                <button
-                    className="btn leaveBtn"
-                    onClick={leaveRoom}
-                >
-                    Leave
-                </button>
-            </div>
-
-            <div className="editorWrap">
-                <Editor
-                    socketRef={socketRef}
-                    roomId={roomId}
-                    onCodeChange={(code) => {
-                        codeRef.current = code;
-                    }}
-                />
-            </div>
-        </div>
+        <textarea
+            id="realtimeEditor"
+        ></textarea>
     );
 };
 
-export default EditorPage;
+export default Editor;
